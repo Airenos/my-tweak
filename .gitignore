@@ -1,0 +1,8 @@
+*.apk
+*.ipa
+*.har
+*.log
+*.txt
+extracted_ipa/
+scratch/
+.system_generated/
