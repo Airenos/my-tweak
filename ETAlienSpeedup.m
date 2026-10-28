@@ -1,5 +1,5 @@
 /**
- * ETAlienSpeedup.m - 外星仔加速器激励广告极速秒跳与自动关弹窗插件
+ * ETAlienSpeedup.m - 外星仔加速器极速快进 + 节点提取插件
  * 适用环境: iOS 15.0 - 17.0 (TrollStore + TrollFools / 越狱环境)
  * 目标 App: 外星仔加速器 (com.etalien.booster)
  */
@@ -16,7 +16,6 @@
 static void (*orig_AVPlayer_setRate)(id self, SEL _cmd, float rate);
 static void my_AVPlayer_setRate(id self, SEL _cmd, float rate) {
     if (rate > 0.0f) {
-        // 只要播放器开始播放，强制拉高至超高倍速
         rate = SPEED_MULTIPLIER;
     }
     if (orig_AVPlayer_setRate) {
@@ -29,7 +28,6 @@ static void my_AVPlayer_play(id self, SEL _cmd) {
     if (orig_AVPlayer_play) {
         orig_AVPlayer_play(self, _cmd);
     }
-    // 强制把播放速率拉到 32 倍速
     if ([self respondsToSelector:@selector(setRate:)]) {
         [self setRate:SPEED_MULTIPLIER];
     }
@@ -37,17 +35,15 @@ static void my_AVPlayer_play(id self, SEL _cmd) {
 
 #pragma mark - 2. GroMore 广告页面弹窗自动关闭 Hook (告别快手等广告的手动点叉)
 
-// 针对 flutter_gromore_ads 插件的核心承载类 FGMRewardVideoPage
 static void (*orig_didPlayFinish)(id self, SEL _cmd, id ad, id error);
 static void my_didPlayFinish(id self, SEL _cmd, id ad, id error) {
     NSLog(@"[ETAlienSpeedup] 广告视频播放完毕，准备自动跳过弹窗并结算发奖...");
     
-    // 1. 先调用原始方法，确保 SDK 内部标记已完播
     if (orig_didPlayFinish) {
         orig_didPlayFinish(self, _cmd, ad, error);
     }
     
-    // 2. 延迟 0.3 秒自动调用广告关闭，绕过 End-Card 结算页
+    // 延迟 0.3 秒自动调用广告关闭，绕过 End-Card 结算页
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         SEL closeSel = NSSelectorFromString(@"nativeExpressRewardedVideoAdDidClose:");
         if ([self respondsToSelector:closeSel]) {
@@ -58,7 +54,6 @@ static void my_didPlayFinish(id self, SEL _cmd, id ad, id error) {
             NSLog(@"[ETAlienSpeedup] 已自动触发 nativeExpressRewardedVideoAdDidClose:");
         }
         
-        // 3. 自动 Dismiss 当前弹出的广告 UIViewController
         UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
         while (rootVC.presentedViewController) {
             rootVC = rootVC.presentedViewController;
@@ -70,13 +65,12 @@ static void my_didPlayFinish(id self, SEL _cmd, id ad, id error) {
     });
 }
 
-#pragma mark - 3. 拦截广告验证失败，自动重试 (避免“获取奖励失败”手动点重试)
+#pragma mark - 3. 拦截广告验证失败，自动补发成功
 
 static void (*orig_serverRewardFail)(id self, SEL _cmd, id error);
 static void my_serverRewardFail(id self, SEL _cmd, id error) {
     NSLog(@"[ETAlienSpeedup] 捕获到奖励回调失败，错误: %@，尝试自动补调成功回调...", error);
     
-    // 强行尝试触发一次成功回调
     SEL succeedSel = NSSelectorFromString(@"nativeExpressRewardedVideoAdServerRewardDidSucceed:verify:");
     if ([self respondsToSelector:succeedSel]) {
         NSMethodSignature *sig = [self methodSignatureForSelector:succeedSel];
@@ -98,7 +92,41 @@ static void my_serverRewardFail(id self, SEL _cmd, id error) {
     }
 }
 
-#pragma mark - 4. 插件入口与 Hook 初始化
+#pragma mark - 4. 方案 2: 加速专线节点自动抓取与导出 (提取电竞级低延迟节点)
+
+static void saveNodeConfigToFile(NSString *info) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if (paths.count == 0) return;
+    NSString *docDir = paths[0];
+    NSString *filePath = [docDir stringByAppendingPathComponent:@"booster_nodes.txt"];
+    
+    NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
+                                                        dateStyle:NSDateFormatterShortStyle
+                                                        timeStyle:NSDateFormatterMediumStyle];
+    NSString *logLine = [NSString stringWithFormat:@"\n[%@] 专线节点信息:\n%@\n----------------------------", timestamp, info];
+    
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:filePath];
+    if (handle) {
+        [handle seekToEndOfFile];
+        [handle writeData:[logLine dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+    } else {
+        [logLine writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+    NSLog(@"[ETAlienSpeedup] 节点信息已保存至: %@", filePath);
+}
+
+// 监听系统通知，当 VPN 节点更新时捕获节点参数
+static void onVpnNotification(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    NSString *notifName = (__bridge NSString *)name;
+    NSDictionary *info = (__bridge NSDictionary *)userInfo;
+    NSLog(@"[ETAlienSpeedup] 捕获到 VPN 状态通知: %@, 数据: %@", notifName, info);
+    if (info) {
+        saveNodeConfigToFile([NSString stringWithFormat:@"%@ -> %@", notifName, info]);
+    }
+}
+
+#pragma mark - 5. 插件入口与 Hook 初始化
 
 static void swizzleInstanceMethod(Class cls, SEL origSel, IMP newImp, IMP *origImp) {
     if (!cls) return;
@@ -111,7 +139,7 @@ static void swizzleInstanceMethod(Class cls, SEL origSel, IMP newImp, IMP *origI
 }
 
 __attribute__((constructor)) static void initSpeedupPlugin(void) {
-    NSLog(@"[ETAlienSpeedup] 插件已注入外星仔加速器，正在应用倍速与免关弹窗补丁...");
+    NSLog(@"[ETAlienSpeedup] 插件已注入外星仔加速器，正在应用倍速、自动关弹窗与节点抓取补丁...");
     
     // 1. Hook AVPlayer (实现全局视频 32 倍速播放)
     Class avPlayerClass = objc_getClass("AVPlayer");
@@ -132,5 +160,27 @@ __attribute__((constructor)) static void initSpeedupPlugin(void) {
         NSLog(@"[ETAlienSpeedup] FGMRewardVideoPage 自动关闭与重试 Hook 成功");
     }
     
-    NSLog(@"[ETAlienSpeedup] 初始化完毕！");
+    // 3. 监听外星仔底层的专线节点更新通知 (方案 2: 提取低延迟专线配置)
+    NSNotificationCenter *dc = [NSNotificationCenter defaultCenter];
+    [dc addObserverForName:@"com.etalien.booster.ETAlienBoosterSDK.BoosterUpdate"
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification * _Nonnull note) {
+        NSLog(@"[ETAlienSpeedup] 收到 BoosterUpdate 通知: %@", note.userInfo);
+        if (note.userInfo) {
+            saveNodeConfigToFile([NSString stringWithFormat:@"BoosterUpdate: %@", note.userInfo]);
+        }
+    }];
+    
+    [dc addObserverForName:@"com.etalien.booster.ETAlienBoosterSDK.BoosterProfileUpdate"
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification * _Nonnull note) {
+        NSLog(@"[ETAlienSpeedup] 收到 BoosterProfileUpdate 节点参数: %@", note.userInfo);
+        if (note.userInfo) {
+            saveNodeConfigToFile([NSString stringWithFormat:@"BoosterProfileUpdate: %@", note.userInfo]);
+        }
+    }];
+
+    NSLog(@"[ETAlienSpeedup] 初始化完毕！专线节点监听已就绪。");
 }
