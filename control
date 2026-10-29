@@ -1,0 +1,9 @@
+Package: com.airenos.etalienspeedup
+Name: ETAlienSpeedup
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: ETAlien Booster speedup and node dump tweak
+Maintainer: Airenos
+Author: Airenos
+Section: Tweaks
