@@ -6,27 +6,37 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  build-linux:
-    name: Build via Linux (Theos Docker)
-    runs-on: ubuntu-latest
-    container:
-      image: nosskirneh/theos-docker:for-ci
+  build:
+    name: Build arm64 Dylib (macOS)
+    runs-on: macos-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Fix git permissions
-        run: git config --global --add safe.directory "*"
-
-      - name: Compile Tweak
+      - name: Compile arm64 Dylib with Apple Clang
         run: |
-          make package FINALPACKAGE=1
-          find .theos/ -name "*.dylib" -exec cp {} ./ETAlienSpeedup.dylib \;
+          echo "Locating iPhoneOS SDK..."
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "Using SDK at: $SDK_PATH"
+          
+          clang -dynamiclib \
+            -isysroot "$SDK_PATH" \
+            -arch arm64 \
+            -miphoneos-version-min=14.0 \
+            -framework Foundation \
+            -framework UIKit \
+            -framework AVFoundation \
+            -fobjc-arc \
+            -O3 \
+            ETAlienSpeedup.m \
+            -o ETAlienSpeedup.dylib
+          
+          echo "Verifying compiled Mach-O architecture:"
+          file ETAlienSpeedup.dylib
 
-      - name: Upload Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ETAlienSpeedup-build
-          path: |
-            ETAlienSpeedup.dylib
-            packages/*.deb
+          name: ETAlienSpeedup.dylib
+          path: ETAlienSpeedup.dylib
